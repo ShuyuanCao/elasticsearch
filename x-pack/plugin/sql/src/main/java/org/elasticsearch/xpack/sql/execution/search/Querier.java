@@ -32,11 +32,11 @@ import org.elasticsearch.xpack.sql.execution.search.extractor.ConstantExtractor;
 import org.elasticsearch.xpack.sql.execution.search.extractor.FieldHitExtractor;
 import org.elasticsearch.xpack.sql.execution.search.extractor.HitExtractor;
 import org.elasticsearch.xpack.sql.execution.search.extractor.MetricAggExtractor;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.AggExtractorInput;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.AggPathInput;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.HitExtractorInput;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.ProcessorDefinition;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.ReferenceInput;
+import org.elasticsearch.xpack.sql.expression.gen.pipeline.AggExtractorInput;
+import org.elasticsearch.xpack.sql.expression.gen.pipeline.AggPathInput;
+import org.elasticsearch.xpack.sql.expression.gen.pipeline.HitExtractorInput;
+import org.elasticsearch.xpack.sql.expression.gen.pipeline.Pipe;
+import org.elasticsearch.xpack.sql.expression.gen.pipeline.ReferenceInput;
 import org.elasticsearch.xpack.sql.querydsl.agg.Aggs;
 import org.elasticsearch.xpack.sql.querydsl.container.ComputedRef;
 import org.elasticsearch.xpack.sql.querydsl.container.GlobalCountRef;
@@ -253,8 +253,9 @@ public class Querier {
             List<FieldExtraction> refs = query.columns();
 
             List<BucketExtractor> exts = new ArrayList<>(refs.size());
+            ConstantExtractor totalCount = new ConstantExtractor(response.getHits().getTotalHits());
             for (FieldExtraction ref : refs) {
-                exts.add(createExtractor(ref, new ConstantExtractor(response.getHits().getTotalHits())));
+                exts.add(createExtractor(ref, totalCount));
             }
             return exts;
         }
@@ -275,7 +276,7 @@ public class Querier {
             }
 
             if (ref instanceof ComputedRef) {
-                ProcessorDefinition proc = ((ComputedRef) ref).processor();
+                Pipe proc = ((ComputedRef) ref).processor();
 
                 // wrap only agg inputs
                 proc = proc.transformDown(l -> {
@@ -351,7 +352,7 @@ public class Querier {
             }
 
             if (ref instanceof ComputedRef) {
-                ProcessorDefinition proc = ((ComputedRef) ref).processor();
+                Pipe proc = ((ComputedRef) ref).processor();
                 // collect hitNames
                 Set<String> hitNames = new LinkedHashSet<>();
                 proc = proc.transformDown(l -> {

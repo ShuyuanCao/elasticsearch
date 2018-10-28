@@ -76,13 +76,7 @@ public class TransportPutAutoFollowPatternAction extends
             listener.onFailure(LicenseUtils.newComplianceException("ccr"));
             return;
         }
-        final Client leaderClient;
-        if (request.getLeaderClusterAlias().equals("_local_")) {
-            leaderClient = client;
-        } else {
-            leaderClient = client.getRemoteClusterClient(request.getLeaderClusterAlias());
-        }
-
+        final Client leaderClient = client.getRemoteClusterClient(request.getRemoteCluster());
         final ClusterStateRequest clusterStateRequest = new ClusterStateRequest();
         clusterStateRequest.clear();
         clusterStateRequest.metaData(true);
@@ -91,26 +85,33 @@ public class TransportPutAutoFollowPatternAction extends
             .filter(e -> ShardFollowTask.HEADER_FILTERS.contains(e.getKey()))
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
-        leaderClient.admin().cluster().state(
-                clusterStateRequest,
-                ActionListener.wrap(
+        String[] indices = request.getLeaderIndexPatterns().toArray(new String[0]);
+        ccrLicenseChecker.hasPrivilegesToFollowIndices(leaderClient, indices, e -> {
+            if (e == null) {
+                leaderClient.admin().cluster().state(
+                    clusterStateRequest,
+                    ActionListener.wrap(
                         clusterStateResponse -> {
                             final ClusterState leaderClusterState = clusterStateResponse.getState();
-                            clusterService.submitStateUpdateTask("put-auto-follow-pattern-" + request.getLeaderClusterAlias(),
-                                    new AckedClusterStateUpdateTask<AcknowledgedResponse>(request, listener) {
+                            clusterService.submitStateUpdateTask("put-auto-follow-pattern-" + request.getRemoteCluster(),
+                                new AckedClusterStateUpdateTask<AcknowledgedResponse>(request, listener) {
 
-                                        @Override
-                                        protected AcknowledgedResponse newResponse(boolean acknowledged) {
-                                            return new AcknowledgedResponse(acknowledged);
-                                        }
+                                    @Override
+                                    protected AcknowledgedResponse newResponse(boolean acknowledged) {
+                                        return new AcknowledgedResponse(acknowledged);
+                                    }
 
-                                        @Override
-                                        public ClusterState execute(ClusterState currentState) throws Exception {
-                                            return innerPut(request, filteredHeaders, currentState, leaderClusterState);
-                                        }
-                                    });
+                                    @Override
+                                    public ClusterState execute(ClusterState currentState) throws Exception {
+                                        return innerPut(request, filteredHeaders, currentState, leaderClusterState);
+                                    }
+                                });
                         },
                         listener::onFailure));
+            } else {
+                listener.onFailure(e);
+            }
+        });
     }
 
     static ClusterState innerPut(PutAutoFollowPatternAction.Request request,
@@ -134,13 +135,14 @@ public class TransportPutAutoFollowPatternAction extends
             headers = new HashMap<>();
         }
 
-        AutoFollowPattern previousPattern = patterns.get(request.getLeaderClusterAlias());
-        List<String> followedIndexUUIDs = followedLeaderIndices.get(request.getLeaderClusterAlias());
-        if (followedIndexUUIDs == null) {
+        AutoFollowPattern previousPattern = patterns.get(request.getName());
+        final List<String> followedIndexUUIDs;
+        if (followedLeaderIndices.containsKey(request.getName())) {
+            followedIndexUUIDs = new ArrayList<>(followedLeaderIndices.get(request.getName()));
+        } else {
             followedIndexUUIDs = new ArrayList<>();
-            followedLeaderIndices.put(request.getLeaderClusterAlias(), followedIndexUUIDs);
         }
-
+        followedLeaderIndices.put(request.getName(), followedIndexUUIDs);
         // Mark existing leader indices as already auto followed:
         if (previousPattern != null) {
             markExistingIndicesAsAutoFollowedForNewPatterns(request.getLeaderIndexPatterns(), leaderClusterState.metaData(),
@@ -151,20 +153,24 @@ public class TransportPutAutoFollowPatternAction extends
         }
 
         if (filteredHeaders != null) {
-            headers.put(request.getLeaderClusterAlias(), filteredHeaders);
+            headers.put(request.getName(), filteredHeaders);
         }
 
         AutoFollowPattern autoFollowPattern = new AutoFollowPattern(
+            request.getRemoteCluster(),
             request.getLeaderIndexPatterns(),
             request.getFollowIndexNamePattern(),
-            request.getMaxBatchOperationCount(),
+            request.getMaxReadRequestOperationCount(),
+            request.getMaxReadRequestSize(),
             request.getMaxConcurrentReadBatches(),
-            request.getMaxOperationSizeInBytes(),
+            request.getMaxWriteRequestOperationCount(),
+            request.getMaxWriteRequestSize(),
             request.getMaxConcurrentWriteBatches(),
+            request.getMaxWriteBufferCount(),
             request.getMaxWriteBufferSize(),
             request.getMaxRetryDelay(),
-            request.getPollTimeout());
-        patterns.put(request.getLeaderClusterAlias(), autoFollowPattern);
+            request.getReadPollTimeout());
+        patterns.put(request.getName(), autoFollowPattern);
         ClusterState.Builder newState = ClusterState.builder(localState);
         newState.metaData(MetaData.builder(localState.getMetaData())
             .putCustom(AutoFollowMetadata.TYPE, new AutoFollowMetadata(patterns, followedLeaderIndices, headers))

@@ -53,6 +53,7 @@ import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.mocksocket.MockServerSocket;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.VersionUtils;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.elasticsearch.test.transport.MockTransportService;
 import org.elasticsearch.test.transport.StubbableTransport;
 import org.elasticsearch.threadpool.TestThreadPool;
@@ -171,9 +172,7 @@ public class RemoteClusterConnectionTests extends ESTestCase {
                         new FutureTransportResponseHandler<ClusterSearchShardsResponse>() {
                             @Override
                             public ClusterSearchShardsResponse read(StreamInput in) throws IOException {
-                                ClusterSearchShardsResponse inst = new ClusterSearchShardsResponse();
-                                inst.readFrom(in);
-                                return inst;
+                                return new ClusterSearchShardsResponse(in);
                             }
                         });
                     TransportRequestOptions options = TransportRequestOptions.builder().withType(TransportRequestOptions.Type.BULK)
@@ -214,9 +213,7 @@ public class RemoteClusterConnectionTests extends ESTestCase {
                         new FutureTransportResponseHandler<ClusterSearchShardsResponse>() {
                             @Override
                             public ClusterSearchShardsResponse read(StreamInput in) throws IOException {
-                                ClusterSearchShardsResponse inst = new ClusterSearchShardsResponse();
-                                inst.readFrom(in);
-                                return inst;
+                                return new ClusterSearchShardsResponse(in);
                             }
                         });
                     TransportRequestOptions options = TransportRequestOptions.builder().withType(TransportRequestOptions.Type.BULK)
@@ -232,9 +229,7 @@ public class RemoteClusterConnectionTests extends ESTestCase {
                         new FutureTransportResponseHandler<ClusterSearchShardsResponse>() {
                             @Override
                             public ClusterSearchShardsResponse read(StreamInput in) throws IOException {
-                                ClusterSearchShardsResponse inst = new ClusterSearchShardsResponse();
-                                inst.readFrom(in);
-                                return inst;
+                                return new ClusterSearchShardsResponse(in);
                             }
                         });
                     TransportRequestOptions ops = TransportRequestOptions.builder().withType(TransportRequestOptions.Type.REG)
@@ -834,6 +829,7 @@ public class RemoteClusterConnectionTests extends ESTestCase {
         }
     }
 
+    @TestLogging("_root:DEBUG, org.elasticsearch.transport:TRACE")
     public void testCloseWhileConcurrentlyConnecting() throws IOException, InterruptedException, BrokenBarrierException {
         List<DiscoveryNode> knownNodes = new CopyOnWriteArrayList<>();
         try (MockTransportService seedTransport = startTransport("seed_node", knownNodes, Version.CURRENT);
@@ -1427,6 +1423,7 @@ public class RemoteClusterConnectionTests extends ESTestCase {
                 service.acceptIncomingRequests();
                 Supplier<DiscoveryNode> seedSupplier = () ->
                     RemoteClusterAware.buildSeedNode("some-remote-cluster", "node_0:" + randomIntBetween(1, 10000), true);
+                assertEquals("node_0", seedSupplier.get().getAttributes().get("server_name"));
                 try (RemoteClusterConnection connection = new RemoteClusterConnection(Settings.EMPTY, "test-cluster",
                     Arrays.asList(seedSupplier), service, service.getConnectionManager(), Integer.MAX_VALUE, n -> true, proxyAddress)) {
                     updateSeedNodes(connection, Arrays.asList(seedSupplier), proxyAddress);

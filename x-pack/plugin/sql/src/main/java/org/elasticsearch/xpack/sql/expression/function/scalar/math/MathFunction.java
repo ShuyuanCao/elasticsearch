@@ -8,9 +8,7 @@ package org.elasticsearch.xpack.sql.expression.function.scalar.math;
 import org.elasticsearch.xpack.sql.expression.Expression;
 import org.elasticsearch.xpack.sql.expression.function.scalar.UnaryScalarFunction;
 import org.elasticsearch.xpack.sql.expression.function.scalar.math.MathProcessor.MathOperation;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.ProcessorDefinition;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.ProcessorDefinitions;
-import org.elasticsearch.xpack.sql.expression.function.scalar.processor.definition.UnaryProcessorDefinition;
+import org.elasticsearch.xpack.sql.expression.gen.processor.Processor;
 import org.elasticsearch.xpack.sql.tree.Location;
 import org.elasticsearch.xpack.sql.type.DataType;
 
@@ -40,8 +38,8 @@ public abstract class MathFunction extends UnaryScalarFunction {
     }
 
     @Override
-    protected String formatScript(String template) {
-        return super.formatScript(format(Locale.ROOT, "Math.%s(%s)", mathFunction(), template));
+    public String processScript(String template) {
+        return super.processScript(format(Locale.ROOT, "{sql}.%s(%s)", mathFunction(), template));
     }
 
     protected String mathFunction() {
@@ -64,9 +62,8 @@ public abstract class MathFunction extends UnaryScalarFunction {
     }
 
     @Override
-    protected final ProcessorDefinition makeProcessorDefinition() {
-        return new UnaryProcessorDefinition(location(), this,
-            ProcessorDefinitions.toProcessorDefinition(field()), new MathProcessor(operation()));
+    protected Processor makeProcessor() {
+        return new MathProcessor(operation());
     }
 
     protected abstract MathOperation operation();

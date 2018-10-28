@@ -168,9 +168,6 @@ import org.elasticsearch.xpack.ml.job.categorization.MlClassicTokenizerFactory;
 import org.elasticsearch.xpack.ml.job.persistence.JobDataCountsPersister;
 import org.elasticsearch.xpack.ml.job.persistence.JobResultsPersister;
 import org.elasticsearch.xpack.ml.job.persistence.JobResultsProvider;
-import org.elasticsearch.xpack.ml.job.process.DataCountsReporter;
-import org.elasticsearch.xpack.ml.job.process.NativeController;
-import org.elasticsearch.xpack.ml.job.process.NativeControllerHolder;
 import org.elasticsearch.xpack.ml.job.process.autodetect.AutodetectBuilder;
 import org.elasticsearch.xpack.ml.job.process.autodetect.AutodetectProcessFactory;
 import org.elasticsearch.xpack.ml.job.process.autodetect.AutodetectProcessManager;
@@ -181,6 +178,8 @@ import org.elasticsearch.xpack.ml.job.process.normalizer.NativeNormalizerProcess
 import org.elasticsearch.xpack.ml.job.process.normalizer.NormalizerFactory;
 import org.elasticsearch.xpack.ml.job.process.normalizer.NormalizerProcessFactory;
 import org.elasticsearch.xpack.ml.notifications.Auditor;
+import org.elasticsearch.xpack.ml.process.NativeController;
+import org.elasticsearch.xpack.ml.process.NativeControllerHolder;
 import org.elasticsearch.xpack.ml.rest.RestDeleteExpiredDataAction;
 import org.elasticsearch.xpack.ml.rest.RestFindFileStructureAction;
 import org.elasticsearch.xpack.ml.rest.RestMlInfoAction;
@@ -262,6 +261,8 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
             Setting.intSetting("xpack.ml.node_concurrent_job_allocations", 2, 0, Property.Dynamic, Property.NodeScope);
     public static final Setting<Integer> MAX_MACHINE_MEMORY_PERCENT =
             Setting.intSetting("xpack.ml.max_machine_memory_percent", 30, 5, 90, Property.Dynamic, Property.NodeScope);
+    public static final Setting<Integer> MAX_LAZY_ML_NODES =
+        Setting.intSetting("xpack.ml.max_lazy_ml_nodes", 0, 0, 3, Property.Dynamic, Property.NodeScope);
 
     private static final Logger logger = Loggers.getLogger(XPackPlugin.class);
 
@@ -289,11 +290,11 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
                         ML_ENABLED,
                         CONCURRENT_JOB_ALLOCATIONS,
                         MachineLearningField.MAX_MODEL_MEMORY_LIMIT,
+                        MAX_LAZY_ML_NODES,
                         MAX_MACHINE_MEMORY_PERCENT,
                         AutodetectBuilder.DONT_PERSIST_MODEL_STATE_SETTING,
                         AutodetectBuilder.MAX_ANOMALY_RECORDS_SETTING,
-                        DataCountsReporter.ACCEPTABLE_PERCENTAGE_DATE_PARSE_ERRORS_SETTING,
-                        DataCountsReporter.ACCEPTABLE_PERCENTAGE_OUT_OF_ORDER_ERRORS_SETTING,
+                        AutodetectBuilder.MAX_ANOMALY_RECORDS_SETTING_DYNAMIC,
                         AutodetectProcessManager.MAX_RUNNING_JOBS_PER_NODE,
                         AutodetectProcessManager.MAX_OPEN_JOBS_PER_NODE,
                         AutodetectProcessManager.MIN_DISK_SPACE_OFF_HEAP));
@@ -362,7 +363,7 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
             return emptyList();
         }
 
-        Auditor auditor = new Auditor(client, clusterService.nodeName());
+        Auditor auditor = new Auditor(client, clusterService.getNodeName());
         JobResultsProvider jobResultsProvider = new JobResultsProvider(client, settings);
         UpdateJobProcessNotifier notifier = new UpdateJobProcessNotifier(settings, client, clusterService, threadPool);
         JobManager jobManager = new JobManager(env, settings, jobResultsProvider, clusterService, auditor, client, notifier);
@@ -379,8 +380,13 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
                     // This will only only happen when path.home is not set, which is disallowed in production
                     throw new ElasticsearchException("Failed to create native process controller for Machine Learning");
                 }
-                autodetectProcessFactory = new NativeAutodetectProcessFactory(environment, settings, nativeController, client);
-                normalizerProcessFactory = new NativeNormalizerProcessFactory(environment, settings, nativeController);
+                autodetectProcessFactory = new NativeAutodetectProcessFactory(
+                    environment,
+                    settings,
+                    nativeController,
+                    client,
+                    clusterService);
+                normalizerProcessFactory = new NativeNormalizerProcessFactory(environment, nativeController);
             } catch (IOException e) {
                 // This also should not happen in production, as the MachineLearningFeatureSet should have
                 // hit the same error first and brought down the node with a friendlier error message
@@ -390,8 +396,7 @@ public class MachineLearning extends Plugin implements ActionPlugin, AnalysisPlu
             autodetectProcessFactory = (job, autodetectParams, executorService, onProcessCrash) ->
                     new BlackHoleAutodetectProcess(job.getId());
             // factor of 1.0 makes renormalization a no-op
-            normalizerProcessFactory = (jobId, quantilesState, bucketSpan, executorService) ->
-                    new MultiplyingNormalizerProcess(settings, 1.0);
+            normalizerProcessFactory = (jobId, quantilesState, bucketSpan, executorService) -> new MultiplyingNormalizerProcess(1.0);
         }
         NormalizerFactory normalizerFactory = new NormalizerFactory(normalizerProcessFactory,
                 threadPool.executor(MachineLearning.UTILITY_THREAD_POOL_NAME));
